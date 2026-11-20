@@ -1,0 +1,19 @@
+{
+  "name": "hier-nav-demo",
+  "version": "1.0.0",
+  "description": "连续世界探索的分层导航：区域连通粗规划 + 按需加载精细分块路径规划",
+  "type": "module",
+  "main": "src/server.js",
+  "bin": {
+    "hier-nav": "src/cli.js"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "demo": "node src/cli.js demo",
+    "test": "node test/run_tests.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "MIT"
+}
