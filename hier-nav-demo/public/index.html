@@ -34,18 +34,29 @@
       <button id="stepBtn" class="secondary">单步 Tick</button>
       <button id="runBtn" class="secondary">自动推进</button>
       <button id="pauseBtn" class="secondary" disabled>暂停</button>
+      <button id="cancelBtn" class="secondary">撤回指令</button>
       <button id="resetBtn" class="secondary">清空规划</button>
       <span class="hint">点击地图设置 <b>起点</b>（左键）/ <b>远程目标</b>（右键）</span>
+    </div>
+    <div class="toolbar">
+      <label>操作区域 X
+        <input id="regionX" type="number" min="0" max="4" value="2" style="width:56px" />
+      </label>
+      <label>Y
+        <input id="regionY" type="number" min="0" max="4" value="2" style="width:56px" />
+      </label>
+      <button id="unloadBtn" class="secondary">卸载该区（撤出规划）</button>
+      <button id="reloadBtn" class="secondary">换门重载该区</button>
     </div>
     <canvas id="map" width="900" height="700"></canvas>
     <div id="legend">
       <span><i class="sw unloaded"></i>未加载（不可假设为自由空间）</span>
       <span><i class="sw loading"></i>加载中/缺少数据</span>
       <span><i class="sw resident"></i>精细块驻留</span>
-      <span><i class="sw coarse"></i>粗层候选路径</span>
-      <span><i class="sw fine"></i>精细已确认路线</span>
-      <span><i class="sw blocked"></i>精细证伪/明确不可达</span>
-      <span><i class="sw queued"></i>暂未搜索</span>
+      <span><i class="sw coarse"></i>承诺路线（粗层候选，含待数据段）</span>
+      <span><i class="sw revoked"></i>已撤销路段（精细证伪）</span>
+      <span><i class="sw fine"></i>精细已确认/安全路段</span>
+      <span><i class="sw blocked"></i>明确不可达</span>
       <span><i class="sw sc"></i>程序化近路（精细层阻断）</span>
     </div>
   </section>
@@ -60,6 +71,8 @@
         <dt>角色位置</dt><dd id="posText">-</dd>
         <dt>目标位置</dt><dd id="goalText">-</dd>
         <dt>不可达原因</dt><dd id="unreachText">-</dd>
+        <dt>否定信号</dt><dd id="outcomeText">-</dd>
+        <dt>渡台席位占用</dt><dd id="seatText">-</dd>
       </dl>
     </div>
 

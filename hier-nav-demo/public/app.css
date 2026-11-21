@@ -87,6 +87,7 @@ button.secondary { background: var(--panel-2); color: var(--text); border: 1px s
 .sw.loading { background: repeating-linear-gradient(45deg, #3a3320, #3a3320 4px, #241f13 4px, #241f13 8px); }
 .sw.resident { background: #1d3a2e; border: 1px solid #2f6b4f; }
 .sw.coarse { background: var(--purple); }
+.sw.revoked { background: repeating-linear-gradient(45deg, #ef6b6b, #ef6b6b 3px, #5a2323 3px, #5a2323 6px); }
 .sw.fine { background: var(--green); }
 .sw.blocked { background: var(--red); }
 .sw.queued { background: var(--gray); }

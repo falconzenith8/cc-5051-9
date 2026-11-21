@@ -21,9 +21,17 @@ export class FinePlanner {
   }
 
   // 门户在精细层是否真正开放且容纳得下指定尺寸的角色。
-  // 使用向内退一格的精细锚点，让有体积的角色完整落在块内空地上。
-  portalPassable(portal, cx, cy, radius) {
+  // 使用向内退两格的精细锚点，让有体积的角色完整落在块内空地上。
+  // 若提供 instanceId，则要求该块此刻驻留的正是这一次载入；
+  // 旧载入上的确认不能用于新载入的数据。
+  portalPassable(portal, cx, cy, radius, { instanceId = null } = {}) {
     const data = this._requireResident(cx, cy);
+    if (instanceId !== null) {
+      const meta = typeof this.store.regionMeta === 'function'
+        ? this.store.regionMeta(cx, cy)
+        : null;
+      if (!meta || meta.instanceId !== instanceId) return false;
+    }
     const anchor = this.world.fineAnchor(portal, cx, cy);
     if (!anchor) return false;
     return fits(data.grid, this.world.size, anchor.lx, anchor.ly, radius);

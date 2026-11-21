@@ -170,6 +170,29 @@ export function createServer() {
           }
           return sendJson(res, 200, sessionSnapshot(session));
         }
+        // 撤回玩家指令：撤销进行中的规划与席位预约。
+        if (req.method === 'POST' && sub === '/cancel') {
+          const body = await readBody(req);
+          session.sim.cancelPlan(body.reason ?? 'player-cancelled');
+          return sendJson(res, 200, sessionSnapshot(session));
+        }
+        // 卸载某区域（并从规划中撤下），让在途旧细化不再生效。
+        if (req.method === 'POST' && sub === '/unload') {
+          const body = await readBody(req);
+          session.sim.dropRegion(body.cx, body.cy);
+          return sendJson(res, 200, sessionSnapshot(session));
+        }
+        // 同名区域以另一组门重载：body.excludePortalIds 里均为排除的东向门。
+        if (req.method === 'POST' && sub === '/reload') {
+          const body = await readBody(req);
+          const { cx, cy, portalIds } = body;
+          if (!session.world.inBounds(cx, cy)) return sendJson(res, 400, { error: 'bad region' });
+          const portals = portalIds
+            ? portalIds.map((id) => session.world.getPortal(id)).filter(Boolean)
+            : session.world.chunkPortals(cx, cy);
+          await session.sim.reloadRegion(cx, cy, portals);
+          return sendJson(res, 200, sessionSnapshot(session));
+        }
         if (req.method === 'POST' && sub === '/reset') {
           session.sim.store.reset();
           session.sim.planner.reset();

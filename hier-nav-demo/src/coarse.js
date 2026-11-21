@@ -16,8 +16,11 @@ export function sideNodeId(portalId, cx, cy) {
 }
 
 export class CoarseGraph {
-  constructor(world) {
+  // regionPortals(cx, cy) 允许为某次载入替换某区域的门集合（同名区域换门重载）。
+  // 未提供时读取世界登记；粗层仍然完全基于登记级几何，不碰精细网格。
+  constructor(world, { regionPortals = (cx, cy) => world.chunkPortals(cx, cy) } = {}) {
     this.world = world;
+    this.regionPortals = regionPortals;
     this.adj = new Map(); // nodeId -> [{node, cost, meta}]
     this.pos = new Map(); // nodeId -> {x, y} 全局网格坐标
     this.portalOf = new Map(); // sideNodeId -> portalId
@@ -37,7 +40,7 @@ export class CoarseGraph {
 
   _build() {
     const w = this.world;
-    // 门户侧节点 + 穿越边
+    // 门户侧节点 + 穿越边。每个门户由登记决定，两侧节点必须在同一记录里。
     for (const portal of w.portals.values()) {
       const idA = sideNodeId(portal.id, portal.a.cx, portal.a.cy);
       const idB = sideNodeId(portal.id, portal.b.cx, portal.b.cy);
@@ -47,17 +50,12 @@ export class CoarseGraph {
       this.portalOf.set(idB, portal.id);
       this._addEdge(idA, idB, portal.estCost, { kind: 'portal', portalId: portal.id });
     }
-    // 每个块内：门户侧节点两两相连，代价为锚点曼哈顿距离（粗估计）
+    // 每个块内：本次载入的门户侧节点两两相连（粗估计曼哈顿距离）。
+    // 关键：块内边只连接“本次载入实际登记的门”，换门重载后旧连接不再存在，
+    // 因此同名区域换一组门后不会借用旧门进出。
     for (let cx = 0; cx < w.cols; cx++) {
       for (let cy = 0; cy < w.rows; cy++) {
-        const sides = w.chunkPortals(cx, cy).map((p) => {
-          const anchor = w.portalAnchor(p, cx, cy);
-          return {
-            id: sideNodeId(p.id, cx, cy),
-            x: cx * CHUNK_SIZE + anchor.lx,
-            y: cy * CHUNK_SIZE + anchor.ly,
-          };
-        });
+        const sides = this._chunkSideNodes(cx, cy);
         for (let i = 0; i < sides.length; i++) {
           for (let j = i + 1; j < sides.length; j++) {
             const cost = manhattan(sides[i].x, sides[i].y, sides[j].x, sides[j].y);
@@ -66,6 +64,18 @@ export class CoarseGraph {
         }
       }
     }
+  }
+
+  _chunkSideNodes(cx, cy) {
+    const w = this.world;
+    return this.regionPortals(cx, cy).map((p) => {
+      const anchor = w.portalAnchor(p, cx, cy);
+      return {
+        id: sideNodeId(p.id, cx, cy),
+        x: cx * CHUNK_SIZE + anchor.lx,
+        y: cy * CHUNK_SIZE + anchor.ly,
+      };
+    });
   }
 
   // start/goal: {wx, wy, cx, cy}
@@ -82,7 +92,7 @@ export class CoarseGraph {
     this.pos.set(goalId, { x: goal.wx, y: goal.wy });
 
     const linkVirtual = (vId, loc) => {
-      for (const p of w.chunkPortals(loc.cx, loc.cy)) {
+      for (const p of this.regionPortals(loc.cx, loc.cy)) {
         const anchor = w.portalAnchor(p, loc.cx, loc.cy);
         const sid = sideNodeId(p.id, loc.cx, loc.cy);
         const gx = loc.cx * CHUNK_SIZE + anchor.lx;

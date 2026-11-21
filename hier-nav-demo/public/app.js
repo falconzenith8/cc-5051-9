@@ -22,6 +22,11 @@ const STATUS_LABEL = {
   done: '已走过',
   blocked: '明确不可达',
 };
+const EDGE_LABEL = {
+  queued: '边：未确认',
+  'awaiting-data': '边：等局部数据（不是不可达）',
+  confirmed: '边：本次载入已确认',
+};
 const STATE_LABEL = {
   idle: '未开始',
   seeking: '规划/行进中',
@@ -139,6 +144,7 @@ function draw() {
   drawPortals();
   drawCoarseRoute();
   drawFineRoutes();
+  drawRevokedRoutes();
   drawPoints();
 }
 
@@ -233,6 +239,14 @@ function drawCoarseRoute() {
   drawPolyline(snapshot.planner.coarseRoute.polyline, 'rgba(181,140,255,0.85)', 2, [6, 5]);
 }
 
+// 已撤销路段：本次已证实不可达、已从承诺路线撤下的门用红色斜线标出。
+function drawRevokedRoutes() {
+  if (!snapshot || !snapshot.planner.map) return;
+  for (const rev of snapshot.planner.map.revoked) {
+    drawPolyline(rev.polyline, 'rgba(239,107,107,0.95)', 3, [3, 3]);
+  }
+}
+
 function drawFineRoutes() {
   if (!snapshot) return;
   for (const leg of snapshot.planner.legs) {
@@ -278,6 +292,15 @@ function renderPanels() {
   $('posText').textContent = snapshot.pos ? `${snapshot.pos.wx}, ${snapshot.pos.wy}` : '-';
   $('goalText').textContent = snapshot.target ? `${snapshot.target.wx}, ${snapshot.target.wy}` : '-';
   $('unreachText').textContent = p.unreachableReason ?? '-';
+  const OUTCOME_LABEL = {
+    'pending-data': '正在等局部数据（不是不可达）',
+    'proven-unreachable': '已证实不可达',
+  };
+  $('outcomeText').textContent = p.outcome ? OUTCOME_LABEL[p.outcome.kind] ?? p.outcome.kind : '无（已规划/已到达）';
+  const seats = snapshot.seats;
+  $('seatText').textContent = seats
+    ? `${seats.occupancy} 席（候补 ${seats.tickets.filter((t) => t.stage === 'waitlist').length}）`
+    : '-';
 
   const m = snapshot.memory;
   $('memBudget').textContent = `${m.budget} / ${m.resident.length} 块`;
@@ -313,6 +336,7 @@ function renderPanels() {
         </div>
         <div class="leg-detail">(${l.from.wx},${l.from.wy}) → (${l.to.wx},${l.to.wy})
           ${l.chunk ? '· 块 ' + l.chunk : ''} ${l.fineCost != null ? '· 精细代价 ' + l.fineCost : ''}
+          ${l.edgeStatus ? '· ' + (EDGE_LABEL[l.edgeStatus] ?? l.edgeStatus) : ''}
           ${l.detail ? '· ' + l.detail : ''}</div>
       </div>`).join('')
     : '<p class="muted">暂无分段</p>';
@@ -327,6 +351,35 @@ $('planBtn').addEventListener('click', startPlan);
 $('stepBtn').addEventListener('click', () => tick(1));
 $('runBtn').addEventListener('click', startAuto);
 $('pauseBtn').addEventListener('click', stopAuto);
+$('cancelBtn').addEventListener('click', async () => {
+  stopAuto();
+  snapshot = await api('/cancel', 'POST', { reason: 'player-cancelled' });
+  renderPanels();
+  draw();
+});
+$('unloadBtn').addEventListener('click', async () => {
+  stopAuto();
+  snapshot = await api('/unload', 'POST', {
+    cx: Number($('regionX').value),
+    cy: Number($('regionY').value),
+  });
+  renderPanels();
+  draw();
+});
+$('reloadBtn').addEventListener('click', async () => {
+  stopAuto();
+  const cx = Number($('regionX').value);
+  const cy = Number($('regionY').value);
+  // 该区域当前登记的门里，保留除最东向那一道之外的全部，形成“另一组门”。
+  const here = world.portals.filter(
+    (p) => (p.a.cx === cx && p.a.cy === cy) || (p.b.cx === cx && p.b.cy === cy),
+  );
+  const drop = here.find((p) => !p.shortcut) ?? here[0];
+  const portalIds = here.filter((p) => p !== drop).map((p) => p.id);
+  snapshot = await api('/reload', 'POST', { cx, cy, portalIds });
+  renderPanels();
+  draw();
+});
 $('resetBtn').addEventListener('click', async () => { stopAuto(); await api('/reset', 'POST'); await refresh(); });
 window.addEventListener('resize', () => { layoutCanvas(); draw(); });
 

@@ -157,6 +157,32 @@ export class World {
     return null;
   }
 
+  // 一次“实际移动”是否穿过了登记在册的边界门（用于检查不会借用旧门）。
+  // 同块内移动不算跨边界；跨边界只能走登记门户，且必须落在该门开口区间内。
+  classifyMove(fromWx, fromWy, toWx, toWy) {
+    const a = this.locate(fromWx, fromWy);
+    const b = this.locate(toWx, toWy);
+    if (a.cx === b.cx && a.cy === b.cy) return { cross: false };
+    if (Math.abs(a.cx - b.cx) + Math.abs(a.cy - b.cy) !== 1) {
+      return { cross: true, portal: null, valid: false };
+    }
+    const vertical = a.cx !== b.cx;
+    const coord = vertical ? Math.min(a.ly, b.ly) : Math.min(a.lx, b.lx);
+    // 相邻两块之间可能有多道门，必须找出开口真正覆盖这次穿越的门。
+    const portal = this.chunkPortals(a.cx, a.cy).find((p) =>
+      [p.a, p.b].some((s) => s.cx === b.cx && s.cy === b.cy)
+      && coord >= p.lo && coord <= p.hi
+      && (p.kind === 'V') === vertical);
+    return { cross: true, portal: portal ?? null, valid: Boolean(portal) };
+  }
+
+  // 某次载入实际开放的门集合（区域数据只描述这一次载入）。
+  openPortalIds(regionData) {
+    if (!regionData) return null;
+    const closed = new Set(regionData.closedPortalIds ?? []);
+    return regionData.portalIds.filter((id) => !closed.has(id));
+  }
+
   // 精细层锚点：从边界开口向块内退两格，使有体积的角色完整落在块内空地上。
   fineAnchor(portal, cx, cy) {
     const a = this.portalAnchor(portal, cx, cy);
@@ -169,14 +195,33 @@ export class World {
     return { lx, ly, side: a.side };
   }
 
+  // 区域是否存在：只由世界登记决定，与是否载入、载入后边是否可行无关。
+  regionExists(cx, cy) {
+    return this.inBounds(cx, cy);
+  }
+
   // 按需生成某个块的精细网格（模拟磁盘上的分块数据）。
   // 返回纯数据，可被序列化，载入与卸载都不影响世界定义。
   generateChunkData(cx, cy) {
+    return this.generateRegionData(cx, cy);
+  }
+
+  // 生成一次“区域载入”的数据。portals 允许同一区域以另一组门连接重载；
+  // closedPortalIds 表示这次载入里被砌死的门（近路、或细节揭示后暂时封闭的出口）。
+  // 返回的数据只描述这一次载入，不写回世界登记，因此同名区域重新载入
+  // 可以拥有不同的门集合，旧载入的确认不能被新载入继承。
+  generateRegionData(
+    cx,
+    cy,
+    { portals = this.chunkPortals(cx, cy), closedPortalIds = null } = {},
+  ) {
     if (!this.inBounds(cx, cy)) throw new Error(`chunk out of bounds: ${cx},${cy}`);
+    const closed = closedPortalIds
+      ? new Set(closedPortalIds)
+      : new Set(portals.filter((p) => p.shortcut).map((p) => p.id));
     const rng = chunkRng(this.seed, cx, cy);
     const n = CHUNK_SIZE;
     const grid = new Uint8Array(n * n).fill(OPEN);
-    const at = (x, y) => grid[y * n + x];
     const set = (x, y, v) => {
       grid[y * n + x] = v;
     };
@@ -189,26 +234,21 @@ export class World {
       set(n - 1, i, WALL);
     }
 
-    // 2) 按登记门户打开边界开口
-    const boundaryAnchors = [];
+    // 2) 只按本次载入开放的门打开边界开口；封闭门保持墙。
+    const openPortals = portals.filter((p) => !closed.has(p.id));
     const anchors = [];
-    for (const p of this.chunkPortals(cx, cy)) {
+    for (const p of openPortals) {
       const boundary = this.portalAnchor(p, cx, cy);
       const fine = this.fineAnchor(p, cx, cy);
-      boundaryAnchors.push(boundary);
       anchors.push(fine);
       if (p.kind === 'V') {
-        for (let ly = p.lo; ly <= p.hi; ly++) {
-          set(boundary.lx, ly, OPEN);
-        }
+        for (let ly = p.lo; ly <= p.hi; ly++) set(boundary.lx, ly, OPEN);
       } else {
-        for (let lx = p.lo; lx <= p.hi; lx++) {
-          set(lx, boundary.ly, OPEN);
-        }
+        for (let lx = p.lo; lx <= p.hi; lx++) set(lx, boundary.ly, OPEN);
       }
     }
 
-    // 3) 内部随机墙块（不覆盖门户开口与锚点）
+    // 3) 内部随机墙块（不覆盖开放的精细锚点）
     const blobCount = 9 + Math.floor(rng() * 5);
     for (let b = 0; b < blobCount; b++) {
       const w = 2 + Math.floor(rng() * 4);
@@ -230,14 +270,11 @@ export class World {
       }
     }
 
-    // 4) 连通性修复：保证块内所有门户精细锚点互通（按角色尺寸雕刻通道）
+    // 4) 连通性修复：保证本次开放的所有门锚点互通（按角色尺寸雕刻通道）
     this._repairConnectivity(grid, anchors.map((a) => ({ x: a.lx, y: a.ly })));
 
-    // 4b) 普通门户按演示最大角色尺寸雕刻净空：锚点周围 r 格内全部打开，
-    //     使粗层候选通道在精细层确实可通行（近路除外，它必须被阻断）。
-    const sc0 = this.shortcutPortalId ? this.portals.get(this.shortcutPortalId) : null;
-    for (const p of this.chunkPortals(cx, cy)) {
-      if (sc0 && p.id === sc0.id) continue;
+    // 4b) 开放门户按最大角色尺寸雕刻净空。
+    for (const p of openPortals) {
       const anchor = this.fineAnchor(p, cx, cy);
       for (let dy = -MAX_CHARACTER_RADIUS; dy <= MAX_CHARACTER_RADIUS; dy++) {
         for (let dx = -MAX_CHARACTER_RADIUS; dx <= MAX_CHARACTER_RADIUS; dx++) {
@@ -249,14 +286,15 @@ export class World {
       }
     }
 
-    // 5) 近路封死：精细层把近路门户的边界开口、内衬与内侧锚点全部砌成墙
-    const sc = sc0;
-    let blocked = false;
-    if (sc && this.portalAnchor(sc, cx, cy)) {
-      const anchor = this.portalAnchor(sc, cx, cy);
-      const fine = this.fineAnchor(sc, cx, cy);
-      if (sc.kind === 'V') {
-        for (let ly = sc.lo; ly <= sc.hi; ly++) {
+    // 5) 本次载入被封闭的门：边界开口、内衬与内侧精细锚点全部砌成墙。
+    //    宏观图上它仍然连通，但这一次载入的局部数据证明它此刻不能通过。
+    for (const p of portals) {
+      if (!closed.has(p.id)) continue;
+      const anchor = this.portalAnchor(p, cx, cy);
+      if (!anchor) continue;
+      const fine = this.fineAnchor(p, cx, cy);
+      if (p.kind === 'V') {
+        for (let ly = p.lo; ly <= p.hi; ly++) {
           set(anchor.lx, ly, WALL);
           set(anchor.lx === 0 ? 1 : n - 2, ly, WALL);
         }
@@ -264,7 +302,7 @@ export class World {
           set(fine.lx, fine.ly + dy, WALL);
         }
       } else {
-        for (let lx = sc.lo; lx <= sc.hi; lx++) {
+        for (let lx = p.lo; lx <= p.hi; lx++) {
           set(lx, anchor.ly, WALL);
           set(lx, anchor.ly === 0 ? 1 : n - 2, WALL);
         }
@@ -272,19 +310,19 @@ export class World {
           set(fine.lx + dx, fine.ly, WALL);
         }
       }
-      blocked = true;
-      // 封墙后再次修复其余门户的连通性（被排除的近路锚点不参与）
-      const rest = anchors
-        .filter((a) => !(a.lx === fine.lx && a.ly === fine.ly))
-        .map((a) => ({ x: a.lx, y: a.ly }));
-      this._repairConnectivity(grid, rest);
+    }
+    if (closed.size) {
+      // 封墙后重新修复其余开放门之间的连通性（封闭门锚点不参与）
+      this._repairConnectivity(grid, anchors.map((a) => ({ x: a.lx, y: a.ly })));
     }
 
     return {
       cx,
       cy,
       grid, // Uint8Array，1=墙 0=空地
-      shortcutBlocked: blocked,
+      portalIds: portals.map((p) => p.id),
+      closedPortalIds: [...closed],
+      shortcutBlocked: portals.some((p) => p.shortcut && closed.has(p.id)),
       byteSize: grid.byteLength + 64,
     };
   }
